@@ -21,7 +21,7 @@
 # July 2014: VLM insert by Simon
 # July 2014: RENG threads by Carlos 
 # 31 Aug 2015 : CMDC - traxis/TWC/Reng number of requests by Mehdi 
-# 
+# 25 Sep 2015 : tb_sgw_requests - added new column "method" - Mehdi
 ###############################################################################################
 
 use DBI;
@@ -213,12 +213,15 @@ sub execute_mainteananca_task {
 		$sth = PMP->query_data($sql);
 	}elsif($table=~/sgw_requests/){
 		$logger->debug_message("... Insert data into agregated table tb_sgw_requests");
-		$sql = 'insert into itvpmp.tb_sgw_requests (id_country, ts, component, node, total_count, avg_rt)
+		$sql = 'insert into itvpmp.tb_sgw_requests (id_country, ts, component, method, node, total_count, avg_rt)
         select ' . $id_country . ', date_format(t.ts,"%Y-%m-%d %H:%i:00") as datets,
-        t.component, t.sgwNode, sum(t.request_count), avg(t.avg_rt)
+		if(t.component="acs" || t.component="ams" || t.component="cmdc" || t.component="mds" || t.component="ps" || t.component="tms" || t.component="vlm" || t.component="wsp", t.component, null) as component,
+        if(t.component="acs" || t.component="ams" || t.component="cmdc" || t.component="mds" || t.component="ps" || t.component="tms" || t.component="vlm" || t.component="wsp", "Compo", t.component) as method,
+		t.sgwNode, sum(t.request_count), avg(t.avg_rt)
         from itvrawdata.' . "$tablename" . ' t
         group by  hour(t.ts),minute(t.ts), t.component, t.sgwNode';
-		$sth = PMP->query_data($sql);
+		$sth = PMP->query_data($sql);		
+		
 	}elsif($table=~/sgw_errors/){
 		$logger->debug_message("... Insert data into agregated table tb_sgw_requests");
 		$sql = "insert into itvpmp.tb_sgw_errors (id_country, ts, node, category,message, total_count)
