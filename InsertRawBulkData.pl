@@ -21,7 +21,9 @@
 # July 2014: VLM insert by Simon
 # July 2014: RENG threads by Carlos 
 # 31 Aug 2015 : CMDC - traxis/TWC/Reng number of requests by Mehdi 
-# 
+# 25 Sep 2015 : tb_sgw_requests - added new column "method" - Mehdi
+# 28 Sep 2015 : added peakhour19-23 agg for AMS and PS - Mehdi
+# 30 Sep 2015 : added peakhour 19-23 for VLM and sgw and per day agg for ps, sgw, ams and vlm - Mehdi
 ###############################################################################################
 
 use DBI;
@@ -41,7 +43,7 @@ my $VERBOSE = 0;
 my $RM = '/bin/rm -f ';
 my $UNZIP = '/bin/gunzip ';
 my $configfile = "/opt/itvpmp/bin/InsertRawBulkData.cfg";
-my $RAWDATARETENTION = 5; #keeps raw data table for n-1 days
+my $RAWDATARETENTION = 3; #keeps raw data table for n-1 days
 my (%rawfile, %newtables);
 
 ######################################################
@@ -213,12 +215,49 @@ sub execute_mainteananca_task {
 		$sth = PMP->query_data($sql);
 	}elsif($table=~/sgw_requests/){
 		$logger->debug_message("... Insert data into agregated table tb_sgw_requests");
-		$sql = 'insert into itvpmp.tb_sgw_requests (id_country, ts, component, node, total_count, avg_rt)
+		$sql = 'insert into itvpmp.tb_sgw_requests (id_country, ts, component, method, node, total_count, avg_rt)
         select ' . $id_country . ', date_format(t.ts,"%Y-%m-%d %H:%i:00") as datets,
-        t.component, t.sgwNode, sum(t.request_count), avg(t.avg_rt)
+		if(t.component="acs" || t.component="ams" || t.component="cmdc" || t.component="mds" || t.component="ps" || t.component="tms" || t.component="vlm" || t.component="wsp", t.component, null) as component,
+        if(t.component="acs" || t.component="ams" || t.component="cmdc" || t.component="mds" || t.component="ps" || t.component="tms" || t.component="vlm" || t.component="wsp", "Compo", t.component) as method,
+		t.sgwNode, sum(t.request_count), avg(t.avg_rt)
         from itvrawdata.' . "$tablename" . ' t
         group by  hour(t.ts),minute(t.ts), t.component, t.sgwNode';
 		$sth = PMP->query_data($sql);
+
+		#Below is inserting the peak hour (19 - 23) aggregation for the reng. Split in response times range.
+		$sql = 'INSERT INTO itvpmp.tb_resptimes_agg (`id_country`,`req_date`, `type`, `component`, `api`,`compo` , `node`, `count_req`, `lt500`, `b500t1000`, `b1000t2000`, `b2000t3000`, `b3000t4000`, `b4000t10000`, `gt10000`)
+		select ' . $id_country. '  ,CAST(date(t.ts) as DATETIME) as timedate, "peakhour19-23" as type,
+		"sgw" as component,
+        if(t.component="acs" || t.component="ams" || t.component="cmdc" || t.component="mds" || t.component="ps" || t.component="tms" || t.component="vlm" || t.component="wsp" || t.component="Compo", "Compo", t.component) as api,
+        if(t.component="acs" || t.component="ams" || t.component="cmdc" || t.component="mds" || t.component="ps" || t.component="tms" || t.component="vlm" || t.component="wsp", t.component, null) as compo,
+		t.sgwNode ,count(t.id) as total_req, 
+		sum(if(t.avg_rt <500,1,0))as lt500, sum(if(t.avg_rt>= 500 && t.avg_rt <1000,1,0)) as b500t1000,
+		sum(if(t.avg_rt>= 1000 && t.avg_rt <2000,1,0)) as b1000t2000, sum(if(t.avg_rt>= 2000 && t.avg_rt <3000,1,0)) as b2000t3000,
+		sum(if(t.avg_rt>= 3000 && t.avg_rt <4000,1,0)) as b3000t4000,sum(if(t.avg_rt>= 4000 && t.avg_rt <10000,1,0)) as b4000t10000,
+		sum(if(t.avg_rt>= 10000,1,0)) as gt10000
+		from itvrawdata.' . "$tablename t
+		where hour(t.ts) >= 17
+		and hour(t.ts) < 21
+		group by date(t.ts), t.sgwNode";
+		$sth = PMP->query_data($sql);
+		
+		
+		#Below is inserting aggregated response times over 24 hours.
+		$sql = 'INSERT INTO itvpmp.tb_resptimes_agg (`id_country`,`req_date`, `type`, `component`, `api`, `compo`, `node`, `count_req`, `lt500`, `b500t1000`, `b1000t2000`, `b2000t3000`, `b3000t4000`, `b4000t10000`, `gt10000`)
+		select ' . $id_country. '  ,CAST(date(t.ts) as DATETIME) as timedate, "per day" as type,
+		"sgw" as component,
+        if(t.component="acs" || t.component="ams" || t.component="cmdc" || t.component="mds" || t.component="ps" || t.component="tms" || t.component="vlm" || t.component="wsp" || t.component="Compo", "Compo", t.component) as api,
+        if(t.component="acs" || t.component="ams" || t.component="cmdc" || t.component="mds" || t.component="ps" || t.component="tms" || t.component="vlm" || t.component="wsp", t.component, null) as compo,
+		t.sgwNode ,count(t.id) as total_req, 
+		sum(if(t.avg_rt <500,1,0))as lt500, sum(if(t.avg_rt>= 500 && t.avg_rt <1000,1,0)) as b500t1000,
+		sum(if(t.avg_rt>= 1000 && t.avg_rt <2000,1,0)) as b1000t2000, sum(if(t.avg_rt>= 2000 && t.avg_rt <3000,1,0)) as b2000t3000,
+		sum(if(t.avg_rt>= 3000 && t.avg_rt <4000,1,0)) as b3000t4000,sum(if(t.avg_rt>= 4000 && t.avg_rt <10000,1,0)) as b4000t10000,
+		sum(if(t.avg_rt>= 10000,1,0)) as gt10000
+		from itvrawdata.' . "$tablename t
+		group by date(t.ts), t.sgwNode";
+		$sth = PMP->query_data($sql);	
+		
+		
 	}elsif($table=~/sgw_errors/){
 		$logger->debug_message("... Insert data into agregated table tb_sgw_requests");
 		$sql = "insert into itvpmp.tb_sgw_errors (id_country, ts, node, category,message, total_count)
@@ -358,6 +397,29 @@ sub execute_mainteananca_task {
 	        group by hour(t.ts),minute(t.ts),module, api, node";
 		$sth = PMP->query_data($sql);
 
+		#Below is inserting the peak hour (19 - 23) aggregation for the reng. Split in response times range.
+		$sql = 'INSERT INTO itvpmp.tb_resptimes_agg (`id_country`,`req_date`, `type`, `component`, `api`, `node`, `count_req`, `lt500`, `b500t1000`, `b1000t2000`, `b2000t3000`, `b3000t4000`, `b4000t10000`, `gt10000`)
+		select ' . $id_country. '  ,CAST(date(t.ts) as DATETIME) as timedate, "peakhour19-23" as type,"ps" as component, t.api, t.node ,count(t.id) as total_req, 
+		sum(if(t.rt <500,1,0))as lt500, sum(if(t.rt>= 500 && t.rt <1000,1,0)) as b500t1000,
+		sum(if(t.rt>= 1000 && t.rt <2000,1,0)) as b1000t2000, sum(if(t.rt>= 2000 && t.rt <3000,1,0)) as b2000t3000,
+		sum(if(t.rt>= 3000 && t.rt <4000,1,0)) as b3000t4000,sum(if(t.rt>= 4000 && t.rt <10000,1,0)) as b4000t10000,
+		sum(if(t.rt>= 10000,1,0)) as gt10000
+		from itvrawdata.' . "$tablename t
+		where hour(t.ts) >= 17
+		and hour(t.ts) < 21
+		group by date(t.ts), t.api, t.node";
+		$sth = PMP->query_data($sql);	
+		
+		#Below is inserting aggregated response times over 24 hours.
+		$sql = 'INSERT INTO itvpmp.tb_resptimes_agg (`id_country`,`req_date`, `type`, `component`, `api`, `node`, `count_req`, `lt500`, `b500t1000`, `b1000t2000`, `b2000t3000`, `b3000t4000`, `b4000t10000`, `gt10000`)
+		select ' . $id_country. '  ,CAST(date(t.ts) as DATETIME) as timedate, "per day" as type,"ps" as component, t.api, t.node ,count(t.id) as total_req, 
+		sum(if(t.rt <500,1,0))as lt500, sum(if(t.rt>= 500 && t.rt <1000,1,0)) as b500t1000,
+		sum(if(t.rt>= 1000 && t.rt <2000,1,0)) as b1000t2000, sum(if(t.rt>= 2000 && t.rt <3000,1,0)) as b2000t3000,
+		sum(if(t.rt>= 3000 && t.rt <4000,1,0)) as b3000t4000,sum(if(t.rt>= 4000 && t.rt <10000,1,0)) as b4000t10000,
+		sum(if(t.rt>= 10000,1,0)) as gt10000
+		from itvrawdata.' . "$tablename t
+		group by date(t.ts), t.api, t.node";
+		$sth = PMP->query_data($sql);
 	
 	}elsif($table=~/tmsondem/){	
 		$logger->debug_message("... Insert data into agregated table tb_tms_ondem");
@@ -407,6 +469,31 @@ sub execute_mainteananca_task {
         group by  hour(t.ts),minute(t.ts),thread_id,ams_node";	
 		$sth = PMP->query_data($sql);
 		
+		#Below is inserting the peak hour (19 - 23) aggregation for the reng. Split in response times range.
+		$sql = 'INSERT INTO itvpmp.tb_resptimes_agg (`id_country`,`req_date`, `type`, `component`, `node`, `count_req`, `lt500`, `b500t1000`, `b1000t2000`, `b2000t3000`, `b3000t4000`, `b4000t10000`, `gt10000`)
+		select ' . $id_country. '  ,CAST(date(t.ts) as DATETIME) as timedate, "peakhour19-23" as type,"ams" as component, t.ams_node ,count(t.id) as total_req, 
+		sum(if(t.response_time <500,1,0))as lt500, sum(if(t.response_time>= 500 && t.response_time <1000,1,0)) as b500t1000,
+		sum(if(t.response_time>= 1000 && t.response_time <2000,1,0)) as b1000t2000, sum(if(t.response_time>= 2000 && t.response_time <3000,1,0)) as b2000t3000,
+		sum(if(t.response_time>= 3000 && t.response_time <4000,1,0)) as b3000t4000,sum(if(t.response_time>= 4000 && t.response_time <10000,1,0)) as b4000t10000,
+		sum(if(t.response_time>= 10000,1,0)) as gt10000
+		from itvrawdata.' . "$tablename t
+		where hour(t.ts) >= 17
+		and hour(t.ts) < 21
+		group by date(t.ts), t.ams_node";
+		$sth = PMP->query_data($sql);
+		
+		#Below is inserting aggregated response times over 24 hours.
+
+		$sql = 'INSERT INTO itvpmp.tb_resptimes_agg (`id_country`,`req_date`, `type`, `component`, `api`, `node`, `count_req`, `lt500`, `b500t1000`, `b1000t2000`, `b2000t3000`, `b3000t4000`, `b4000t10000`, `gt10000`)
+		select ' . $id_country. '  ,CAST(date(t.ts) as DATETIME) as timedate, "per day" as type,"ams" as component, "", t.ams_node ,count(t.id) as total_req, 
+		sum(if(t.response_time <500,1,0))as lt500, sum(if(t.response_time>= 500 && t.response_time <1000,1,0)) as b500t1000,
+		sum(if(t.response_time>= 1000 && t.response_time <2000,1,0)) as b1000t2000, sum(if(t.response_time>= 2000 && t.response_time <3000,1,0)) as b2000t3000,
+		sum(if(t.response_time>= 3000 && t.response_time <4000,1,0)) as b3000t4000,sum(if(t.response_time>= 4000 && t.response_time <10000,1,0)) as b4000t10000,
+		sum(if(t.response_time>= 10000,1,0)) as gt10000
+		from itvrawdata.' . "$tablename t
+		group by date(t.ts), t.ams_node";
+		$sth = PMP->query_data($sql);	
+		
 	}elsif($table=~/wsp/){
 		$logger->debug_message("... Insert data into agregated table tb_wsp_requests");
         $sql = "insert into itvpmp.tb_wsp_requests (id_country,req_date,req_time,thread_id,ams_node,avg_response_time,total_request)
@@ -430,6 +517,30 @@ sub execute_mainteananca_task {
                 else "Main Menu" end as mode
          from itvrawdata.' . "$tablename  t  group by hour(t.ti),minute(t.ti),http_method,status_code";
                 $sth = PMP->query_data($sql);
+				
+		#Below is inserting the peak hour (19 - 23) aggregation for the reng. Split in response times range.
+		$sql = 'INSERT INTO itvpmp.tb_resptimes_agg (`id_country`,`req_date`, `type`, `component`, `node`, `count_req`, `lt500`, `b500t1000`, `b1000t2000`, `b2000t3000`, `b3000t4000`, `b4000t10000`, `gt10000`)
+		select ' . $id_country. '  ,CAST(date(t.ti) as DATETIME) as timedate, "peakhour19-23" as type,"vlm" as component, t.vlm_node ,count(t.id) as total_req, 
+		sum(if(t.tdiff <500,1,0))as lt500, sum(if(t.tdiff>= 500 && t.tdiff <1000,1,0)) as b500t1000,
+		sum(if(t.tdiff>= 1000 && t.tdiff <2000,1,0)) as b1000t2000, sum(if(t.tdiff>= 2000 && t.tdiff <3000,1,0)) as b2000t3000,
+		sum(if(t.tdiff>= 3000 && t.tdiff <4000,1,0)) as b3000t4000,sum(if(t.tdiff>= 4000 && t.tdiff <10000,1,0)) as b4000t10000,
+		sum(if(t.tdiff>= 10000,1,0)) as gt10000
+		from itvrawdata.' . "$tablename t
+		where hour(t.ti) >= 17
+		and hour(t.ti) < 21
+		group by date(t.ti), t.vlm_node";
+		$sth = PMP->query_data($sql);	
+				
+		#Below is inserting aggregated response times over 24 hours.
+		$sql = 'INSERT INTO itvpmp.tb_resptimes_agg (`id_country`,`req_date`, `type`, `component`, `node`, `count_req`, `lt500`, `b500t1000`, `b1000t2000`, `b2000t3000`, `b3000t4000`, `b4000t10000`, `gt10000`)
+		select ' . $id_country. '  ,CAST(date(t.ti) as DATETIME) as timedate, "per day" as type,"vlm" as component, t.vlm_node ,count(t.id) as total_req, 
+		sum(if(t.tdiff <500,1,0))as lt500, sum(if(t.tdiff>= 500 && t.tdiff <1000,1,0)) as b500t1000,
+		sum(if(t.tdiff>= 1000 && t.tdiff <2000,1,0)) as b1000t2000, sum(if(t.tdiff>= 2000 && t.tdiff <3000,1,0)) as b2000t3000,
+		sum(if(t.tdiff>= 3000 && t.tdiff <4000,1,0)) as b3000t4000,sum(if(t.tdiff>= 4000 && t.tdiff <10000,1,0)) as b4000t10000,
+		sum(if(t.tdiff>= 10000,1,0)) as gt10000
+		from itvrawdata.' . "$tablename t
+		group by date(t.ti), t.vlm_node";
+		$sth = PMP->query_data($sql);		
 
          }elsif($table=~/Jmx/){
                 $logger->debug_message("... Insert data into agregated table tb_jmx_stats");
